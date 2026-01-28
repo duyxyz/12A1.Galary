@@ -57,28 +57,28 @@ jobs:
                       logs = json.load(f)
               except: logs = []
 
-          # Lấy danh sách file thay đổi trong commit này
-          added_files = os.popen('git diff-tree --no-commit-id --name-status -r HEAD | grep \"^A\" | awk \"{print \$2}\"').read().splitlines()
-          deleted_files = os.popen('git diff-tree --no-commit-id --name-status -r HEAD | grep \"^D\" | awk \"{print \$2}\"').read().splitlines()
+          # Lấy danh sách file thay đổi bằng Python để tránh lỗi ký tự rác
+          changed_raw = os.popen('git diff-tree --no-commit-id --name-status -r HEAD').read().splitlines()
 
-          now = datetime.datetime.now() + datetime.timedelta(hours=7) # Múi giờ VN
+          now = datetime.datetime.now() + datetime.timedelta(hours=7) # VN Time
           time_str = now.strftime('%H:%M %d/%m')
 
           new_entries = []
-          for f in added_files:
-              if f.endswith('.webp'):
-                  num = f.replace('.webp', '')
-                  new_entries.append({'m': f'Vừa thêm ảnh {num} lúc {time_str}', 't': int(now.timestamp() * 1000)})
-          
-          for f in deleted_files:
-              if f.endswith('.webp'):
-                  num = f.replace('.webp', '')
-                  new_entries.append({'m': f'Đã xóa ảnh {num} lúc {time_str}', 't': int(now.timestamp() * 1000)})
+          for line in changed_raw:
+              parts = line.split()
+              if len(parts) < 2: continue
+              status, filepath = parts[0], parts[1]
+              
+              if filepath.endswith('.webp'):
+                  num = filepath.replace('.webp', '')
+                  if status == 'A':
+                      new_entries.append({'m': f'Vừa thêm ảnh {num} lúc {time_str}', 't': int(now.timestamp() * 1000)})
+                  elif status == 'D':
+                      new_entries.append({'m': f'Đã xóa ảnh {num} lúc {time_str}', 't': int(now.timestamp() * 1000)})
 
           if new_entries:
               logs.extend(new_entries)
-              # Chỉ giữ lại 50 dòng mới nhất để file không quá nặng
-              logs = logs[-50:]
+              logs = logs[-50:] # Giữ 50 dòng
               with open(log_file, 'w', encoding='utf-8') as f:
                   json.dump(logs, f, ensure_ascii=False, indent=2)
           "
