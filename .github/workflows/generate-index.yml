@@ -1,10 +1,10 @@
-name: Auto Generate Image Index
+name: Auto Generate Index and Log
 
 on:
   push:
     paths:
-      - '**.webp' # Chạy khi có ảnh .webp mới
-  workflow_dispatch: # Cho phép bấm nút chạy thủ công
+      - '*.webp' # Chạy khi có ảnh .webp được thêm hoặc xóa ở thư mục gốc
+  workflow_dispatch:
 
 jobs:
   build:
@@ -15,56 +15,78 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Cần xem commit trước để biết file nào bị xóa
 
-      - name: Set up Python and Install Dependencies
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Generate Index and Append Log
+        env:
+          GITHUB_SHA: ${{ github.sha }}
         run: |
-          python3 -m pip install --upgrade pip
           python3 -m pip install Pillow
-
-      - name: Generate JSON Index with Metadata
-        run: |
           python3 -c "
-          import os, json
+          import os, json, datetime
           from PIL import Image
-          
+
+          # 1. Cập nhật images.json (Danh sách ảnh hiện tại)
           results = []
-          # Quét tất cả file .webp ở thư mục gốc của repo 12A1-Galary
           files = [f for f in os.listdir('.') if f.endswith('.webp')]
-          
-          def get_num(name):
-              try: return int(name.split('.')[0])
-              except: return 0
-              
-          # Sắp xếp ảnh mới nhất lên đầu (số lớn nhất)
-          files.sort(key=get_num, reverse=True)
-          
+          # Sắp xếp theo số thứ tự giảm dần
+          files.sort(key=lambda x: int(x.split('.')[0]) if x.split('.')[0].isdigit() else 0, reverse=True)
+
           for filename in files:
               try:
                   with Image.open(filename) as img:
                       width, height = img.size
-                      results.append({
-                          'i': get_num(filename),
-                          'w': width,
-                          'h': height
-                      })
-              except Exception as e:
-                  print(f'Error processing {filename}: {e}')
-                  
+                      results.append({'i': int(filename.split('.')[0]), 'w': width, 'h': height})
+              except: pass
+
           with open('images.json', 'w') as f:
               json.dump(results, f)
+
+          # 2. Cập nhật log.json (Nhật ký thay đổi)
+          log_file = 'log.json'
+          logs = []
+          if os.path.exists(log_file):
+              try:
+                  with open(log_file, 'r', encoding='utf-8') as f:
+                      logs = json.load(f)
+              except: logs = []
+
+          # Lấy danh sách file thay đổi trong commit này
+          added_files = os.popen('git diff-tree --no-commit-id --name-status -r HEAD | grep \"^A\" | awk \"{print \$2}\"').read().splitlines()
+          deleted_files = os.popen('git diff-tree --no-commit-id --name-status -r HEAD | grep \"^D\" | awk \"{print \$2}\"').read().splitlines()
+
+          now = datetime.datetime.now() + datetime.timedelta(hours=7) # Múi giờ VN
+          time_str = now.strftime('%H:%M %d/%m')
+
+          new_entries = []
+          for f in added_files:
+              if f.endswith('.webp'):
+                  num = f.replace('.webp', '')
+                  new_entries.append({'m': f'Vừa thêm ảnh {num} lúc {time_str}', 't': int(now.timestamp() * 1000)})
+          
+          for f in deleted_files:
+              if f.endswith('.webp'):
+                  num = f.replace('.webp', '')
+                  new_entries.append({'m': f'Đã xóa ảnh {num} lúc {time_str}', 't': int(now.timestamp() * 1000)})
+
+          if new_entries:
+              logs.extend(new_entries)
+              # Chỉ giữ lại 50 dòng mới nhất để file không quá nặng
+              logs = logs[-50:]
+              with open(log_file, 'w', encoding='utf-8') as f:
+                  json.dump(logs, f, ensure_ascii=False, indent=2)
           "
-          echo "Generated images.json:"
-          cat images.json
 
       - name: Commit and Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add images.json
-          
-          if git diff --staged --quiet; then
-            echo "No changes in images.json"
-          else
-            git commit -m "🚀 Auto-update images list [skip ci]"
-            git push
-          fi
+          git add images.json log.json
+          git commit -m " Auto-update index and log [skip ci]" || echo "No changes"
+          git push
